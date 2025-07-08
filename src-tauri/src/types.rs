@@ -1,62 +1,42 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PackageJson {
     pub name: String,
-    pub description: Option<String>,
-    pub license: Option<String>,
+    #[serde(rename = "private")]
+    pub is_private: bool,
     pub version: String,
     #[serde(rename = "type")]
     pub package_type: Option<String>,
-    pub types: Option<String>,
-    pub engines: Option<HashMap<String, String>>,
-    pub module: Option<String>,
-    pub main: Option<String>,
-    pub exports: Option<serde_json::Value>,
-    pub imports: Option<serde_json::Value>,
-    pub repository: Option<Repository>,
-    pub bugs: Option<Bugs>,
-    pub homepage: Option<String>,
-    pub keywords: Option<Vec<String>>,
+    pub scripts: Option<IndexMap<String, String>>,
+    pub dependencies: Option<IndexMap<String, String>>,
     #[serde(rename = "devDependencies")]
-    pub dev_dependencies: Option<HashMap<String, String>>,
-    pub dependencies: Option<HashMap<String, String>>,
-    pub scripts: Option<HashMap<String, String>>,
-    #[serde(rename = "_id")]
-    pub id: Option<String>,
-    #[serde(rename = "_integrity")]
-    pub integrity: Option<String>,
-    #[serde(rename = "_resolved")]
-    pub resolved: Option<String>,
-    #[serde(rename = "_from")]
-    pub from: Option<String>,
-    #[serde(rename = "_nodeVersion")]
-    pub node_version: Option<String>,
-    #[serde(rename = "_npmVersion")]
-    pub npm_version: Option<String>,
-    pub dist: Option<Dist>,
-    #[serde(rename = "_npmUser")]
-    pub npm_user: Option<NpmUser>,
-    pub directories: Option<serde_json::Value>,
-    pub maintainers: Option<Vec<Maintainer>>,
-    #[serde(rename = "_npmOperationalInternal")]
-    pub npm_operational_internal: Option<serde_json::Value>,
-    #[serde(rename = "_hasShrinkwrap")]
-    pub has_shrinkwrap: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Repository {
-    #[serde(rename = "type")]
-    pub repo_type: String,
-    pub url: String,
-    pub directory: Option<String>,
+    pub dev_dependencies: Option<IndexMap<String, String>>,
+    #[serde(rename = "packageManager")]
+    pub package_manager: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Bugs {
     pub url: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PackageObject {
+    pub(crate) package: String,
+    pub(crate) version: String,
+}
+
+pub struct Deps<'a> {
+    pub(crate) deps: &'a Vec<PackageObject>,
+    pub(crate) devdeps: &'a Vec<PackageObject>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PnpmConfig {
+    pub overrides: Option<IndexMap<String, String>>,
+    #[serde(rename = "onlyBuiltDependencies")]
+    pub only_built_dependencies: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
