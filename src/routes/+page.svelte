@@ -27,13 +27,13 @@
         });
         folderPath = await openFolder;
         console.log(folderPath);
-    }
 
-    async function readPath(event: Event) {
-        event.preventDefault();
-        // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-        invoke("find_package_json", { name: path })
-            .then((message) => console.log(message))
+        invoke("find_package_json", { pathName: folderPath })
+            .then((message) => {
+                console.log(message);
+                // If the command returns package.json data, you can set it here
+                // packageInfo = message as PackageJson;
+            })
             .catch((value) => {
                 console.error(value);
             });
@@ -41,17 +41,8 @@
 </script>
 
 <main class="container">
-    <div class="bg-gray-900">
+    <div class="">
         <div class="flex flex-col justify-center items-center gap-y-4">
-            <form class="flex flex-row" onsubmit={readPath}>
-                <input
-                    id="path-input"
-                    placeholder="Enter a path..."
-                    bind:value={path}
-                />
-                <Button type="submit">find</Button>
-            </form>
-
             <form onsubmit={openPath}>
                 <Button variant="default" type="submit">Open file</Button>
             </form>
@@ -70,6 +61,7 @@
         font-size: 16px;
         line-height: 24px;
         font-weight: 400;
+        background-color: #2f2f2f;
 
         color: #0f0f0f;
 
@@ -90,10 +82,6 @@
 
     input,
     input,
-    button {
-        outline: none;
-    }
-
     #path-input {
         margin-right: 5px;
     }
@@ -102,15 +90,6 @@
         :root {
             color: #f6f6f6;
             background-color: #2f2f2f;
-        }
-
-        input,
-        button {
-            color: #ffffff;
-            background-color: #0f0f0f98;
-        }
-        button:active {
-            background-color: #0f0f0f69;
         }
     }
 </style>
