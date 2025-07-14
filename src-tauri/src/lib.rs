@@ -1,14 +1,17 @@
+mod npm;
 mod types;
 
+use regex::Regex;
 use reqwest::Client;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use serde::{Deserialize, Serialize};
-use std::fs::{self, DirEntry, File};
+use crate::npm::NpmPackageUnspecifiedVersion;
+use crate::types::PackageJsonParsedObject;
+use crate::types::{DepsWithMetadata, PackageJson, PackageVersionInfo, ParsedJsonDeps};
+use node_semver::{Range, Version};
+use std::fs::{self, File};
 use std::io::BufReader;
-use std::path::{self, Path, PathBuf};
-use std::thread::current;
+use std::path::PathBuf;
 use std::{env, io};
-use tauri::PackageInfo;
 use tokio::task::JoinHandle;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +30,8 @@ enum Error {
     StdError,
     #[error("bad package version found")]
     BadVersion,
+    #[error(transparent)]
+    Regex(#[from] regex::Error),
 }
 
 impl serde::Serialize for Error {
@@ -38,62 +43,58 @@ impl serde::Serialize for Error {
     }
 }
 
-use crate::types::{Deps, DepsWithMetadata, NpmRegistryResponse, PackageJson, PackageVersionInfo};
-use crate::types::{NpmPackageResponse, PackageObject};
+async fn get_package_info(package_name: &str, version: &str, client: &Client) -> Result<(), Error> {
+    let valid_version: Vec<&str> = version
+        .split(|c| c == '^' || c == '~')
+        .filter(|str| !str.is_empty())
+        .collect();
+    let split_version_num = valid_version.first().unwrap();
 
-async fn get_package_info(
-    package_name: &str,
-    version: &str,
-    client: &Client,
-) -> Result<PackageVersionInfo, Error> {
-    let valid_version: Vec<&str> = version.split("^").filter(|str| !str.is_empty()).collect();
-    //print!("{:#?}", valid_version);
+    let version_semver: Version = split_version_num.parse().unwrap();
+
+    //let range: Range = version.parse().unwrap();
+
+    
     let package_in_registry_req =
         format!("https://registry.npmjs.org/{name}/", name = package_name,);
-    let res = client.get(package_in_registry_req).send().await?;
-    let package: NpmRegistryResponse = res.json().await?;
 
-    let version_num = valid_version.first().unwrap();
-    let current_version: String = format!(
-        "https://registry.npmjs.org/{name}/{versionNum}",
-        name = package_name,
-        versionNum = version_num
-    );
+    let registry_response = client.get(package_in_registry_req).send().await?;
 
-    let res_current = tokio::spawn(client.get(current_version).send());
+    let npmPackage: Result<NpmPackageUnspecifiedVersion, reqwest::Error> =
+        registry_response.json().await;
 
-    let latest_version = format!(
-        "https://registry.npmjs.org/{name}/{versionNum}",
-        name = package_name,
-        versionNum = package.dist_tags.latest
-    );
+    let package_version = match npmPackage {
+        Ok(package) => {
+            let current_version = package.versions.get(split_version_num.to_owned());
 
-    let res_latest = tokio::spawn(client.get(latest_version).send());
+            let current_latest_patch = package
+                .versions
+                .into_iter()
+                .find(|(str, version_obj)| -> bool {
+                        let version: Version =  version_obj.version.parse().unwrap();
+                        version.major == version_semver.major &&
+                        version.minor  == version_semver.minor &&
+                        version.patch > version_semver.patch
+                     });
 
-    let responses = tokio::try_join!(flatten(res_current), flatten(res_latest));
+            let latest = package.versions.get(&package.dist_tags.latest);
+
+            let pvi = PackageVersionInfo {
+                current: current_version,
+                latest_patch: current_latest_patch,
+                latest: latest_version,
+                error: 
+            };
+        }
+        Err(err) => {}
+    };
 
     //let a: NpmPackageResponse = client.get(&latest_version).send().await?.json().await?;
 
     //println!("{:#?}", a);
 
-    match responses {
-        Ok((current, latest)) => {
-            let current_version: Option<NpmPackageResponse> = current.json().await?;
-            //println!("{:#?}", current_version);
-
-            let latest_version: Option<NpmPackageResponse> = latest.json().await?;
-
-            let pvi = PackageVersionInfo {
-                current: current_version,
-                latest: latest_version,
-            };
-
-            //print!("object: {:#?}", pvi.latest);
-
-            Ok(pvi)
-        }
-        Err(_err) => Err(Error::NoPackageFoundInApi),
-    }
+    
+    Ok(())
 }
 
 async fn flatten(
@@ -106,24 +107,27 @@ async fn flatten(
     }
 }
 
-fn create_package_object(path_name: &PathBuf) -> Result<Deps, Box<dyn std::error::Error>> {
+fn create_package_object(
+    path_name: &PathBuf,
+) -> Result<ParsedJsonDeps, Box<dyn std::error::Error>> {
     let f = File::open(path_name)?;
     let reader = BufReader::new(f);
 
     let package_json: Option<PackageJson> = serde_json::from_reader(reader)?;
-    let mut package_array: Vec<PackageObject> = Vec::new();
-    let mut dev_dep_array: Vec<PackageObject> = Vec::new();
+    let mut package_array: Vec<PackageJsonParsedObject> = Vec::new();
+    let mut dev_dep_array: Vec<PackageJsonParsedObject> = Vec::new();
 
     if let Some(pkage) = package_json {
         if let Some(dependencies) = pkage.dependencies {
             for (package, version) in dependencies {
-                let new_package = PackageObject { package, version };
+                let new_package = PackageJsonParsedObject { package, version };
                 package_array.push(new_package);
             }
         }
         if let Some(devdep) = pkage.dev_dependencies {
             for (package, version) in devdep {
-                let new_package: PackageObject = PackageObject { package, version };
+                let new_package: PackageJsonParsedObject =
+                    PackageJsonParsedObject { package, version };
                 dev_dep_array.push(new_package);
             }
         }
@@ -133,7 +137,7 @@ fn create_package_object(path_name: &PathBuf) -> Result<Deps, Box<dyn std::error
 
     dev_dep_array.sort_by(|a, b| a.package.cmp(&b.package));
 
-    let dep = Deps {
+    let dep = ParsedJsonDeps {
         deps: package_array,
         dev_deps: dev_dep_array,
     };
@@ -142,7 +146,7 @@ fn create_package_object(path_name: &PathBuf) -> Result<Deps, Box<dyn std::error
 }
 
 #[tauri::command]
-async fn find_package_json(path_name: &str) -> Result<DepsWithMetadata, Error> {
+async fn find_package_json(path_name: &str) -> Result<(), Error> {
     let dir_entries = fs::read_dir(path_name)?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
@@ -155,45 +159,44 @@ async fn find_package_json(path_name: &str) -> Result<DepsWithMetadata, Error> {
     if let Some(package_path) = dir_entries.iter().find(|path| {
         path.file_name()
             .and_then(|name| Some(name.to_string_lossy().to_string()))
-            .map(|name| name == PACKAGE_NAME)
+            .map(|name| -> bool { name == PACKAGE_NAME })
             .unwrap_or(false)
     }) {
-        let package_vec = create_package_object(package_path).unwrap();
+        let package_vec = create_package_object(package_path).map_err(|_| Error::StdError)?;
         let client = reqwest::Client::new();
 
         let mut package_with_metadata = Vec::<PackageVersionInfo>::new();
         let mut dev_dep_package_with_metadata = Vec::<PackageVersionInfo>::new();
-
         for pack in package_vec.deps {
             let package = get_package_info(&pack.package, &pack.version, &client).await;
 
-            match package {
+            /*  match package {
                 Ok(pack) => package_with_metadata.push(pack),
                 Err(err) => {
                     println!("{:#?}", &pack.package);
                     println!("{:#?}", &pack.version);
-
+                    println!("{:#?}", &pack);
                     println!("{:#?}", err);
                     continue;
                 }
-            }
+            } */
         }
 
-        for pack in package_vec.dev_deps {
-            let dev_pack = get_package_info(&pack.package, &pack.version, &client).await;
+        /*   for pack in package_vec.dev_deps {
+                   let dev_pack = get_package_info(&pack.package, &pack.version, &client).await;
 
-            match dev_pack {
-                Ok(pack) => dev_dep_package_with_metadata.push(pack),
-                Err(_) => continue,
-            }
-        }
-        let packages_with_metadata: DepsWithMetadata = DepsWithMetadata {
-            deps: package_with_metadata,
-            dev_deps: dev_dep_package_with_metadata,
-        };
-        //println!("Deps: {:#?}", packages_with_metadata);
-
-        return Ok(packages_with_metadata);
+                   match dev_pack {
+                       Ok(pack) => dev_dep_package_with_metadata.push(pack),
+                       Err(_) => continue,
+                   }
+               }
+               let packages_with_metadata: DepsWithMetadata = DepsWithMetadata {
+                   deps: package_with_metadata,
+                   dev_deps: dev_dep_package_with_metadata,
+               };
+               //println!("Deps: {:#?}", packages_with_metadata);
+        */
+        return Ok(());
     } else {
         return Result::Err(Error::NoPackageJson);
     }
